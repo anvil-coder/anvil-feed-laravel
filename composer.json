@@ -1,0 +1,42 @@
+{
+  "name": "anvil-coder/anvil-feed-laravel",
+  "description": "Laravel integration for the Anvil Feed SDK.",
+  "type": "library",
+  "license": "MIT",
+  "require": {
+    "php": ">=8.3",
+    "anvil-coder/anvil-feed-php": "^0.1",
+    "illuminate/console": "^12.0",
+    "illuminate/contracts": "^12.0",
+    "illuminate/support": "^12.0"
+  },
+  "require-dev": {
+    "nyholm/psr7": "^1.8",
+    "orchestra/testbench": "^10.0",
+    "phpunit/phpunit": "^11.0"
+  },
+  "repositories": [
+    {
+      "type": "path",
+      "url": "../anvil-feed-php",
+      "options": {
+        "symlink": true,
+        "versions": { "anvil-coder/anvil-feed-php": "0.1.0" }
+      }
+    }
+  ],
+  "autoload": { "psr-4": { "AnvilFeed\\Laravel\\": "src/" } },
+  "autoload-dev": {
+    "psr-4": {
+      "AnvilFeed\\Laravel\\Tests\\": "tests/",
+      "AnvilFeed\\Tests\\": "../anvil-feed-php/tests/"
+    }
+  },
+  "extra": {
+    "laravel": {
+      "providers": ["AnvilFeed\\Laravel\\AnvilFeedServiceProvider"]
+    }
+  },
+  "config": { "sort-packages": true },
+  "minimum-stability": "stable"
+}
