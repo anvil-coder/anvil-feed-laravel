@@ -100,15 +100,32 @@ final class WorkerFlushTest extends TestCase
     public function testTheFlushIsBoundedByRequestTimeoutMsHereAsWell(): void
     {
         $this->app['config']->set('anvil-feed.request_timeout_ms', 400);
-        // Interval zero rather than an advanced clock: the deadline the Sender gets is absolute, so a
-        // clock the test has run forward would hand the socket the distance between the two clocks.
-        $this->app['config']->set('anvil-feed.flush_interval_ms', 0);
+        // This used to configure an interval of ZERO, so that every Looping iteration was due and the
+        // deadline needed no clock movement — the deadline PeriodicFlush hands the Sender is ABSOLUTE and
+        // is compared against the real clock, so a fake clock run forward hands the socket the distance
+        // between the two clocks and the budget read back is that distance too large.
+        //
+        // Zero stopped being available: `flush_interval_ms` is floored at 1 in BOTH languages since the
+        // parity round, because an interval of zero is a busy loop rather than a faster flush. The floor
+        // is the decision, not the accident — so the test keeps its property (fake time == real time at
+        // the moment of the flush) a different way: the fake clock starts ten milliseconds BEHIND the real
+        // one and is advanced by exactly those ten. The interval has then elapsed, and the deadline is
+        // still the real clock's.
+        //
+        // Ten and not one: a unix timestamp is around 1.7e9 and a double's step at that magnitude is
+        // ~2.4e-7, so advancing by 0.001 s and multiplying by 1000 can land at 0.99976 — under the floored
+        // interval, and the flush silently does not happen. The gap has to be wide enough that the
+        // arithmetic is not the thing being measured.
+        $this->app['config']->set('anvil-feed.flush_interval_ms', 1);
         $this->rebuildSdk();
+        $this->clock = new MutableClock(microtime(true) - 0.010);
+        $this->app->instance(PeriodicFlush::class, new PeriodicFlush($this->app, $this->clock));
 
         $this->client()->captureMessage('bounded in a worker too');
+        $this->clock->advanceMs(10);
         $this->dispatch(new Looping('redis', 'queue-worker'));
 
-        self::assertCount(1, $this->transport->calls);
+        self::assertCount(1, $this->transport->calls, 'the floored interval has elapsed, so the loop is due');
         self::assertLessThanOrEqual(400, (int) $this->transport->budgets()[0]);
     }
 
