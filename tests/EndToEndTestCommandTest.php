@@ -53,14 +53,25 @@ final class EndToEndTestCommandTest extends TestCase
 
         $listening = fgets($pipes[1]);
         if (!is_string($listening) || preg_match('/listening (\d+)/', $listening, $matches) !== 1) {
+            $stderr = stream_get_contents($pipes[2]);
+            // tearDownAfterClass does NOT run when setUpBeforeClass fails, so the node process this method
+            // started would outlive the suite — holding a port and appending to a journal a later run then
+            // reads. Kill it before failing.
+            self::stopTheStub();
             self::fail('the ingest stub did not report a port. stdout: ' . var_export($listening, true)
-                . ' stderr: ' . var_export(stream_get_contents($pipes[2]), true));
+                . ' stderr: ' . var_export($stderr, true));
         }
         self::$port = (int) $matches[1];
         fgets($pipes[1]);
     }
 
     public static function tearDownAfterClass(): void
+    {
+        self::stopTheStub();
+    }
+
+    /** Idempotent, and called from setUpBeforeClass's failure path too — see the comment there. */
+    private static function stopTheStub(): void
     {
         if (is_resource(self::$process)) {
             proc_terminate(self::$process);
