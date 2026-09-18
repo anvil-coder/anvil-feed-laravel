@@ -109,7 +109,7 @@ final class EndToEndTestCommandTest extends TestCase
         $this->artisan('anvil-feed:test')
             ->expectsOutputToContain('event_id:')
             ->expectsOutputToContain('verdict:     accepted')
-            ->expectsOutputToContain('Search the Anvil cockpit inbox for')
+            ->expectsOutputToContain("Open the project's Incidents inbox")
             ->assertExitCode(0)
             ->run();
     }
