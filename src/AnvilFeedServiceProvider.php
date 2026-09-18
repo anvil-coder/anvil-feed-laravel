@@ -67,6 +67,15 @@ final class AnvilFeedServiceProvider extends ServiceProvider
                 $options['environment'] ?? null,
                 $app['config']->get('app.env')
             );
+            // And the endpoint through the same repair (review finding 4). `env()` substitutes the
+            // default of config/anvil-feed.php only for an ABSENT variable: an empty placeholder line
+            // `ANVIL_INGEST_ENDPOINT=` in a .env reaches this SDK as '', and that used to become the
+            // endpoint. Config::fromArray repairs a blank of its own accord now; this keeps the repair
+            // visible on the path a Laravel application actually takes, beside the two beneath it.
+            $options['endpoint'] = self::firstNonEmpty(
+                $options['endpoint'] ?? null,
+                Config::DEFAULT_ENDPOINT
+            );
 
             // Total by contract: an option this cannot read becomes the documented default plus one log
             // line. A mistake in config/anvil-feed.php is visible, never a failure to boot.

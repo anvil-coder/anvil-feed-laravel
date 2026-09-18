@@ -153,4 +153,55 @@ final class ServiceProviderTest extends TestCase
 
         self::assertInstanceOf(PsrTransport::class, $this->app->make(VerdictTransport::class)->inner());
     }
+
+    // ---------------------------------------------------------------- finding 4: an empty .env line
+
+    /**
+     * `ANVIL_INGEST_ENDPOINT=` — one placeholder line somebody left in a .env — is not an ABSENT
+     * variable, and `env()` substitutes the default of config/anvil-feed.php only for an absent one. The
+     * endpoint became '', `eventsUrl()` became `/events`, every transport answered "the ingest endpoint
+     * is not a usable URL", and the sender backed off for ever behind a single log line.
+     *
+     * The mechanism is asserted first, on the SHIPPED config file, so that this test fails for the right
+     * reason if Laravel ever changes it.
+     */
+    public function testAnEmptyEndpointVariableDoesNotBecomeTheEndpoint(): void
+    {
+        putenv('ANVIL_INGEST_ENDPOINT=');
+        $_ENV['ANVIL_INGEST_ENDPOINT'] = '';
+        $_SERVER['ANVIL_INGEST_ENDPOINT'] = '';
+
+        try {
+            $published = require __DIR__ . '/../config/anvil-feed.php';
+            self::assertSame('', $published['endpoint'],
+                'env() substitutes its default only for an ABSENT variable — this is the mechanism');
+
+            $config = Config::fromArray(
+                array_merge($published, ['token' => self::TOKEN, 'service' => 'disponio-api']),
+                new \AnvilFeed\Logger()
+            );
+
+            self::assertSame(Config::DEFAULT_ENDPOINT, $config->endpoint,
+                'a blank value is the default, exactly as AnvilFeedConfig.Builder treats one');
+            self::assertSame(Config::DEFAULT_ENDPOINT . '/events', $config->eventsUrl());
+        } finally {
+            putenv('ANVIL_INGEST_ENDPOINT');
+            unset($_ENV['ANVIL_INGEST_ENDPOINT'], $_SERVER['ANVIL_INGEST_ENDPOINT']);
+        }
+    }
+
+    /** The same repair on the container path, beside the two it already did for service and environment. */
+    public function testTheProviderRepairsABlankEndpointBeforeItReachesTheConfig(): void
+    {
+        $this->app['config']->set('anvil-feed.endpoint', '');
+        $this->app->forgetInstance(Config::class);
+
+        try {
+            self::assertSame(Config::DEFAULT_ENDPOINT, $this->app->make(Config::class)->endpoint);
+        } finally {
+            // Back to the discard port before anything in this application can queue an event.
+            $this->app['config']->set('anvil-feed.endpoint', 'http://127.0.0.1:9/api/feed');
+            $this->app->forgetInstance(Config::class);
+        }
+    }
 }

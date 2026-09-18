@@ -14,7 +14,10 @@ declare(strict_types=1);
  * You do not have to. Without it the package's own copy is used and .env alone configures the SDK.
  */
 return [
-    'endpoint' => env('ANVIL_INGEST_ENDPOINT', 'https://app.anvil-coder.tech/api/feed'),
+    // The default is the SDK's own constant rather than a second copy of the URL. An EMPTY variable
+    // (`ANVIL_INGEST_ENDPOINT=` left in a .env) is not an absent one and env() returns '' for it, so the
+    // repair to the default happens in AnvilFeedServiceProvider and in Config, not here.
+    'endpoint' => env('ANVIL_INGEST_ENDPOINT', AnvilFeed\Config::DEFAULT_ENDPOINT),
     'token' => env('ANVIL_INGEST_TOKEN'),
 
     // Left null on purpose. AnvilFeedServiceProvider fills them from config('app.name') and
