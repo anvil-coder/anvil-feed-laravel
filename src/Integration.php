@@ -66,13 +66,29 @@ final class Integration
                             ? $handler
                             : new ReportingHandler($handler)
                     );
-                } catch (\Throwable) {
+                } catch (\Throwable $decoration) {
                     // An application whose handler cannot be decorated keeps the reportable callback,
-                    // which covers everything but the self-reporting exceptions.
+                    // which covers everything but the self-reporting exceptions — said once, so the
+                    // operator learns why those never arrive (task-5 re-review observation).
+                    self::sayDecorationFailed($booted, $decoration);
                 }
             });
         } catch (\Throwable) {
             // As above. Nothing here may cost the application its boot.
+        }
+    }
+
+    /** One log line, never an exception: there is nowhere left to report to if the logger itself fails. */
+    private static function sayDecorationFailed(Application $app, \Throwable $decoration): void
+    {
+        try {
+            $app->make(\AnvilFeed\Logger::class)->once(
+                'handler-decoration',
+                'anvil-feed: the exception handler could not be decorated: ' . $decoration->getMessage()
+                    . '. Exceptions with their own report() method will not become events. This is said once.'
+            );
+        } catch (\Throwable) {
+            // Nothing here may cost the application its boot.
         }
     }
 
