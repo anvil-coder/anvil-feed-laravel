@@ -91,7 +91,7 @@ final class TestCommand extends Command
         }
 
         if ($verdict === 'accepted') {
-            $this->line('Open the project\'s Incidents inbox in the Anvil cockpit: the newest row is the test event (exception type ending in TestEvent) under your service name, within a minute. Event id ' . $id . '. It is there within a minute.');
+            $this->line('Open the project\'s Incidents inbox in the Anvil cockpit: the newest row is the test event (exception type ending in TestEvent) under your service name, within a minute. Event id ' . $id . '.');
 
             return self::SUCCESS;
         }
