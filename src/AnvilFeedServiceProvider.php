@@ -12,8 +12,13 @@ use AnvilFeed\Logger;
 use AnvilFeed\Transport\DirectTransport;
 use AnvilFeed\Transport\PsrTransport;
 use AnvilFeed\Transport\Transport;
+use Illuminate\Console\Events\CommandFinished;
+use Illuminate\Contracts\Container\Container;
 use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessed;
+use Illuminate\Queue\Events\Looping;
+use Illuminate\Queue\Events\WorkerStopping;
 use Illuminate\Support\ServiceProvider;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestFactoryInterface;
@@ -21,12 +26,19 @@ use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Log\LoggerInterface;
 
 /**
- * The whole integration: four bindings, one Artisan command, one listener and one callback that runs
- * after the response. FR-1 c — the diff an application takes on is init and configuration, nothing else.
+ * The whole integration: five bindings, one Artisan command, the listeners, and the callbacks that flush
+ * once the work is done. FR-1 c — the diff an application takes on is init and configuration, nothing else.
  *
- * Z4 is why the flush rides terminating() and the shutdown hook: no socket is opened inside the request
- * path, so an ingest that is slow, rate limiting or simply gone cannot add a millisecond to a customer's
- * p99. What it can do is hold a worker for at most request_timeout_ms AFTER the response is on the wire.
+ * Z4, stated as what is actually true and asserted: **no socket is opened inside the request path**. The
+ * request path enqueues; every send rides terminating(), the worker's own loop, or the end of the process,
+ * and each one is bounded by request_timeout_ms. Enqueueing is not free — building an event reads the
+ * source of the frames in the stack — and it is deliberately the only thing the request pays for. Whether
+ * the terminating flush is observable by the client depends on the SAPI: php-fpm has already sent the
+ * response (fastcgi_finish_request); a SAPI without it spends the budget before the connection closes.
+ *
+ * This provider is deliberately NOT deferrable: AnvilFeed::init() has to be live before any application
+ * code calls the facade, and a deferred provider is one an application only discovers it needed after the
+ * exception it wanted reported.
  */
 final class AnvilFeedServiceProvider extends ServiceProvider
 {
@@ -65,6 +77,10 @@ final class AnvilFeedServiceProvider extends ServiceProvider
             return new VerdictTransport($this->chooseTransport($app));
         });
 
+        $this->app->singleton(PeriodicFlush::class, static function (Application $app): PeriodicFlush {
+            return new PeriodicFlush($app);
+        });
+
         $this->app->singleton(Client::class, static function (Application $app): Client {
             return Client::create(
                 $app->make(Config::class),
@@ -89,41 +105,70 @@ final class AnvilFeedServiceProvider extends ServiceProvider
         $client = $this->app->make(Client::class);
         AnvilFeed::init($client);
 
-        // After the response is on the wire (Z4). Resolved from the container at call time so that a host
-        // — or a test — that rebinds the client still gets the one that holds the queued events.
-        $this->app->terminating(function (): void {
-            $this->flushAfterResponse();
+        // After the response is on the wire (Z4). Application::terminate() calls its callbacks through
+        // the container, so the typed parameter is the container that is terminating — under Octane's
+        // per-request sandbox that is not necessarily the one this provider was constructed with, and the
+        // events that need flushing are in the one being torn down.
+        $this->app->terminating(function (Application $app): void {
+            $this->flushAfterResponse($app);
         });
 
-        // A queue worker and an Artisan command have no response to terminate after, so the end of the
-        // process is the flush point. Client::registerShutdownFlush() is register_shutdown_function() and
-        // is idempotent; calling it here means the hook exists from boot rather than from the first
-        // captured event, and it means exactly one hook rather than one of ours plus one of the core's.
+        // The last resort for a process that ends without any of the events below firing.
+        // Client::registerShutdownFlush() is register_shutdown_function() and is idempotent; calling it
+        // here means the hook exists from boot rather than from the first captured event, and that there
+        // is exactly one hook rather than one of ours plus one of the core's.
         if ($this->app->runningInConsole()) {
             $client->registerShutdownFlush();
         }
+
+        $events = $this->app->make('events');
 
         // The queue's own failure path. Laravel fires JobFailed from Worker::handleJobException() BEFORE
         // Worker::runJob() hands the same throwable to the exception handler, so this listener is the one
         // that gets to report a failed job — which is why the `queue` tag is on the event and not lost to
         // whichever path happened to run first. Reported::firstTime() is what makes "exactly one event"
         // (FR-1 a) true across the two paths.
-        $this->app->make('events')->listen(JobFailed::class, JobFailureListener::class);
+        $events->listen(JobFailed::class, JobFailureListener::class);
+
+        // …and this is how that event LEAVES a worker that runs for hours. Registered after the listener
+        // above, because Laravel fires listeners in registration order and a flush before the capture
+        // would post an empty queue. `Looping` fires on every iteration of the worker loop, idle ones
+        // included, so an event queued by a failing job is never more than flush_interval_ms plus one
+        // iteration away from the ingest. None of these callbacks may return a value: Worker dispatches
+        // Looping through `until()`, and a non-null answer there pauses the worker.
+        $events->listen(Looping::class, function (): void {
+            $this->app->make(PeriodicFlush::class)->whenDue();
+        });
+        $events->listen(JobProcessed::class, function (): void {
+            $this->app->make(PeriodicFlush::class)->whenDue();
+        });
+        $events->listen(JobFailed::class, function (): void {
+            $this->app->make(PeriodicFlush::class)->whenDue();
+        });
+        $events->listen(WorkerStopping::class, function (): void {
+            $this->app->make(PeriodicFlush::class)->now();
+        });
+
+        // The same cadence for a long-running Artisan command — a scheduler loop, an importer, a
+        // `horizon` supervisor. A command that ends releases the rest through the shutdown hook above.
+        $events->listen(CommandFinished::class, function (): void {
+            $this->app->make(PeriodicFlush::class)->whenDue();
+        });
     }
 
     /**
-     * The budget: at most request_timeout_ms of wall clock AFTER the response, for the whole drain.
-     * Whatever the deadline cuts short stays in the queue for the next flush rather than holding the
-     * worker, and nothing in here can reach the application — including a transport that throws in breach
-     * of its own contract, and including a container that has already been torn down.
+     * The flush that rides the end of a request. The budget is at most request_timeout_ms of wall clock
+     * AFTER the response, for the whole drain; whatever the deadline cuts short stays in the queue for the
+     * next flush rather than holding the worker. Nothing in here can reach the application — including a
+     * transport that throws in breach of its own contract, and including a container torn down early,
+     * which PeriodicFlush says once rather than swallowing.
      */
-    public function flushAfterResponse(): void
+    public function flushAfterResponse(?Container $container = null): void
     {
         try {
-            $budgetMs = $this->app->make(Config::class)->requestTimeoutMs;
-            $this->app->make(Client::class)->flush(microtime(true) + ($budgetMs / 1000));
+            ($container ?? $this->app)->make(PeriodicFlush::class)->now();
         } catch (\Throwable) {
-            // Deliberately silent. FR-2 b, and the loop guard: this package never reports its own failure.
+            // The container itself could not hand out the flusher. There is nothing left to log through.
         }
     }
 
@@ -171,9 +216,4 @@ final class AnvilFeedServiceProvider extends ServiceProvider
         return is_string($fallback) && trim($fallback) !== '' ? $fallback : $configured;
     }
 
-    /** @return list<class-string> */
-    public function provides(): array
-    {
-        return [Config::class, Client::class, Logger::class, VerdictTransport::class];
-    }
 }

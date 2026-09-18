@@ -22,13 +22,28 @@ final class VerdictTransport implements Transport
 {
     private ?Response $last = null;
 
+    /** How many bodies this process has handed to the transport. */
+    private int $posts = 0;
+
     public function __construct(private readonly Transport $inner)
     {
     }
 
     public function post(string $url, string $body, ?int $timeoutMs = null): Response
     {
+        $this->posts++;
+
         return $this->last = $this->inner->post($url, $body, $timeoutMs);
+    }
+
+    /**
+     * Counted, not compared: a host that binds its own transport may return a cached or replayed Response
+     * object, and "the same object as before" would then read a perfectly successful post as a failure to
+     * send — in the one command whose whole job is giving the right verdict.
+     */
+    public function posts(): int
+    {
+        return $this->posts;
     }
 
     /** The last answer, or null when nothing has been posted in this process. */

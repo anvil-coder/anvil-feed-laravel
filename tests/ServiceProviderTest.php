@@ -7,6 +7,7 @@ namespace AnvilFeed\Laravel\Tests;
 use AnvilFeed\Client;
 use AnvilFeed\Config;
 use AnvilFeed\Laravel\AnvilFeedServiceProvider;
+use AnvilFeed\Laravel\PeriodicFlush;
 use AnvilFeed\Laravel\VerdictTransport;
 use AnvilFeed\Transport\DirectTransport;
 use AnvilFeed\Transport\PsrTransport;
@@ -102,6 +103,24 @@ final class ServiceProviderTest extends TestCase
         self::assertIsInt($budget);
         self::assertGreaterThan(0, $budget);
         self::assertLessThanOrEqual(750, $budget, 'the socket must never get more than the flush budget');
+    }
+
+    /**
+     * Client::flush() logs its own failures and Sender logs the transport's, so what reaches this catch is
+     * the case nobody has a diagnosis for. Swallowing it makes every event queue and nothing ever leave,
+     * permanently and invisibly.
+     */
+    public function testAFlushThatCannotEvenStartSaysSoOnceAndNeverThrows(): void
+    {
+        $this->app->bind(Config::class, static function (): Config {
+            throw new \RuntimeException('the config binding is broken');
+        });
+
+        $this->app->make(PeriodicFlush::class)->now();
+        $this->app->make(PeriodicFlush::class)->now();
+        $this->app->terminate();
+
+        self::assertCount(1, $this->logLinesContaining('the flush after the response could not run'));
     }
 
     public function testTheBundledTransportIsTheDefault(): void

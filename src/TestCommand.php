@@ -33,9 +33,12 @@ final class TestCommand extends Command
         $this->line('service:     ' . $config->service);
         $this->line('environment: ' . $config->environment);
         $this->line('release:     ' . ($config->release ?? '(none — not a git checkout, and ANVIL_RELEASE is unset)'));
+        // Twelve characters is the eight-character prefix `anv_srv_` plus four of the secret: enough to
+        // see that the format is right and the value is present, in a line that routinely ends up in a CI
+        // log, a support ticket or a screen share.
         $this->line('token:       ' . ($config->token === null
             ? 'MISSING — set ANVIL_INGEST_TOKEN'
-            : substr($config->token, 0, 16) . '…'));
+            : substr($config->token, 0, 12) . '… (' . strlen($config->token) . ' characters)'));
 
         if (!$config->enabled) {
             $this->error('verdict:     disabled');
@@ -57,7 +60,7 @@ final class TestCommand extends Command
         }
         $this->line('event_id:    ' . $id);
 
-        $before = $transport->last();
+        $postsBefore = $transport->posts();
         $client->flush();
         $answer = $transport->last();
 
@@ -68,7 +71,7 @@ final class TestCommand extends Command
 
             return self::FAILURE;
         }
-        if ($answer === null || $answer === $before) {
+        if ($answer === null || $transport->posts() === $postsBefore) {
             $this->warn('verdict:     failed transiently');
             $this->line('             Nothing reached the ingest. The sender is paused after an earlier '
                 . '429 or 503, and the event is still in the queue.');

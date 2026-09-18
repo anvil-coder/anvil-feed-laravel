@@ -29,6 +29,9 @@ return [
     'release' => env('ANVIL_RELEASE'),
 
     'max_queue_size' => (int) env('ANVIL_MAX_QUEUE_SIZE', 1000),
+    // How often a process that has no response to terminate after sends what it has queued: a queue
+    // worker (on every loop iteration, and when a job ends) and a long-running Artisan command. A web
+    // request flushes once, after the response, whatever this says.
     'flush_interval_ms' => (int) env('ANVIL_FLUSH_INTERVAL_MS', 2000),
     'batch_size' => (int) env('ANVIL_BATCH_SIZE', 50),
     'connect_timeout_ms' => (int) env('ANVIL_CONNECT_TIMEOUT_MS', 1000),
@@ -46,7 +49,9 @@ return [
     'fingerprint_window_ms' => (int) env('ANVIL_FINGERPRINT_WINDOW_MS', 60000),
 
     // Exceptions raised while serving one of these paths are never reported: that is the loop guard for an
-    // application that is itself an Anvil ingest. `*` stops at a segment boundary, `**` crosses it.
+    // application that is itself an Anvil ingest. `*` stops at a segment boundary, `**` crosses it. Both
+    // the full path and the path relative to the application's mount point are matched, so an application
+    // served from https://host/app/ needs no prefix here.
     'ignored_request_paths' => ['/api/feed/**'],
 
     /*

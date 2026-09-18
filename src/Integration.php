@@ -5,7 +5,11 @@ declare(strict_types=1);
 namespace AnvilFeed\Laravel;
 
 use AnvilFeed\Client;
+use AnvilFeed\Config;
+use AnvilFeed\LoopGuard;
 use Illuminate\Contracts\Container\Container;
+use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 
 /**
@@ -30,6 +34,46 @@ final class Integration
         $exceptions->reportable(static function (\Throwable $error): void {
             self::report($error);
         });
+
+        self::wrapTheHandler();
+    }
+
+    /**
+     * The reportable callback above is not reached for every exception: Laravel's handler returns early
+     * for an exception that carries its own `report()` method, which is an idiom in Laravel's own
+     * documentation. So the container's exception handler is decorated as well, and the decorator captures
+     * before the handler decides — gated by the handler's own shouldReport(), so the framework's
+     * don't-report list (a 404, a validation failure) stays out. Reported::firstTime() keeps the ordinary
+     * case, where both paths see the same throwable, at exactly one event.
+     *
+     * Deferred to booted() because this method normally runs INSIDE the resolution of the handler
+     * (ApplicationBuilder::withExceptions registers it through afterResolving), and Container::extend()
+     * applied at that moment would be overwritten by the singleton instance the resolution is about to
+     * store.
+     */
+    private static function wrapTheHandler(): void
+    {
+        try {
+            $app = \Illuminate\Container\Container::getInstance();
+            if (!$app instanceof Application) {
+                return;
+            }
+            $app->booted(static function (Application $booted): void {
+                try {
+                    $booted->extend(
+                        ExceptionHandler::class,
+                        static fn (ExceptionHandler $handler): ExceptionHandler => $handler instanceof ReportingHandler
+                            ? $handler
+                            : new ReportingHandler($handler)
+                    );
+                } catch (\Throwable) {
+                    // An application whose handler cannot be decorated keeps the reportable callback,
+                    // which covers everything but the self-reporting exceptions.
+                }
+            });
+        } catch (\Throwable) {
+            // As above. Nothing here may cost the application its boot.
+        }
     }
 
     /**
@@ -47,6 +91,9 @@ final class Integration
                 return;
             }
             if (!Reported::firstTime($error)) {
+                return;
+            }
+            if (self::ignoredUnderTheMountPath($container)) {
                 return;
             }
 
@@ -91,12 +138,9 @@ final class Integration
                 $context['tags'] = ['route' => $name];
             }
 
-            $user = $request->user();
-            if ($user !== null && method_exists($user, 'getAuthIdentifier')) {
-                $identifier = $user->getAuthIdentifier();
-                if (is_scalar($identifier)) {
-                    $context['user_id'] = (string) $identifier;   // an id, never a name or an address
-                }
+            $identifier = self::alreadyAuthenticatedId($container);
+            if ($identifier !== null) {
+                $context['user_id'] = $identifier;   // an id, never a name or an address
             }
         } catch (\Throwable) {
             // There may be no request at all, no session, no authenticated user, or a user provider that
@@ -124,7 +168,73 @@ final class Integration
             return null;
         }
 
-        return $request->server->get('REQUEST_METHOD') === null ? null : $request;
+        // Both, because an Artisan command invoked from a CGI wrapper or a webhook runner inherits a
+        // REQUEST_METHOD in $_SERVER on its own, and an event describing a request that is not what broke
+        // is worse than an event with no request block.
+        if ($request->server->get('REQUEST_METHOD') === null || $request->server->get('REQUEST_URI') === null) {
+            return null;
+        }
+
+        return $request;
+    }
+
+    /**
+     * The id of the user the request has ALREADY authenticated, or null.
+     *
+     * Never $request->user(): that calls the user resolver, which resolves the guard, which reads the
+     * session and queries the users table. On the request that matters — an exception thrown because the
+     * database is down — that is a fresh query against the dead database, inside the error path, with no
+     * timeout of its own. The try/catch would keep it from throwing into the application; it would not
+     * keep it from blocking. So the guard is asked whether it already has a user and is never asked to
+     * find one.
+     */
+    private static function alreadyAuthenticatedId(Container $container): ?string
+    {
+        try {
+            if (!$container->resolved('auth')) {
+                return null;   // authentication never ran in this request
+            }
+            $guard = $container->make('auth')->guard();
+            if (!method_exists($guard, 'hasUser') || $guard->hasUser() !== true) {
+                return null;
+            }
+            $user = $guard->user();
+            if ($user === null || !method_exists($user, 'getAuthIdentifier')) {
+                return null;
+            }
+            $identifier = $user->getAuthIdentifier();
+
+            return is_scalar($identifier) ? (string) $identifier : null;
+        } catch (\Throwable) {
+            return null;   // a custom guard of somebody else's is not worth an event
+        }
+    }
+
+    /**
+     * The loop guard, asked about the path the application is actually mounted at.
+     *
+     * `ignored_request_paths` reaches the core through `request.url`, and the core strips scheme and host
+     * — so an application served from https://host/app/ has its ingest at /app/api/feed/events, which the
+     * shipped default `/api/feed/**` does not match. Request::path() is relative to the mount point, so
+     * this closes it without asking an operator to know the difference. The core still matches the full
+     * path, so both spellings are honoured.
+     */
+    private static function ignoredUnderTheMountPath(Container $container): bool
+    {
+        try {
+            $request = self::requestOrNull($container);
+            if ($request === null) {
+                return false;
+            }
+            $paths = $container->make(Config::class)->ignoredRequestPaths;
+            if ($paths === []) {
+                return false;
+            }
+
+            return (new LoopGuard($paths))->ignoresPath('/' . ltrim($request->path(), '/'));
+        } catch (\Throwable) {
+            return false;
+        }
     }
 
     /** The status an exception already knows about itself; null when it would be a guess. */

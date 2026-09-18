@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AnvilFeed\Laravel\Tests;
 
 use AnvilFeed\Laravel\Tests\Support\RejectingTransport;
+use AnvilFeed\Laravel\Tests\Support\ReplayingTransport;
 use AnvilFeed\Tests\Support\RecordingTransport;
 use AnvilFeed\Transport\Response;
 
@@ -28,6 +29,39 @@ final class TestCommandTest extends TestCase
         self::assertCount(1, $this->transport->calls);
         $posted = json_decode($this->transport->calls[0]['body'], true);
         self::assertSame('AnvilFeed.TestEvent', $posted['exception']['type']);
+    }
+
+    public function testTheTokenLineShowsTheFormatAndFourCharactersOfTheSecret(): void
+    {
+        $this->artisan('anvil-feed:test')
+            ->expectsOutputToContain('token:       anv_srv_0123… (40 characters)')
+            ->assertExitCode(0)
+            ->run();
+    }
+
+    /**
+     * A host may bind a transport that replays one Response object — a stub, a cache, a circuit breaker.
+     * Deciding "nothing was posted" by comparing that object to the previous one calls a post that really
+     * happened "nothing reached the ingest", which is the wrong diagnosis in the one command whose job is
+     * the right one. The count says what happened.
+     */
+    public function testTheCommandDecidesWhatWasPostedByCountAndNotByObjectIdentity(): void
+    {
+        $transport = new ReplayingTransport();
+        $this->useTransport($transport);
+
+        $this->artisan('anvil-feed:test')->assertExitCode(0)->run();
+
+        // The second run posts a second body and gets the FIRST answer back, which names the first event.
+        $this->artisan('anvil-feed:test')
+            ->expectsOutputToContain('202 without a verdict for this')
+            ->doesntExpectOutputToContain('Nothing reached the ingest')
+            ->assertExitCode(1)
+            ->run();
+
+        // Three: the first run's post, the second run's post, and the one more attempt the core grants an
+        // event the ingest answered 202 about without naming it.
+        self::assertSame(3, $transport->posts);
     }
 
     public function testARejectedEventNamesTheIngestsOwnReasonCode(): void
