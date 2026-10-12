@@ -1,6 +1,13 @@
 # anvil-feed-laravel
 
-The Laravel integration for the [Anvil Feed](../anvil-feed-php) SDK. An unhandled exception becomes one
+> **Read-only mirror.** This repository is the `php/anvil-feed-laravel` directory of the private
+> `anvil-coder/anvil-feed` monorepo, split on every tag and every push to `main`. Nothing is edited here:
+> a push to this repository is overwritten by the next mirror run. Issues and pull requests go to the
+> monorepo's owners. The `tests/` directory reads the monorepo's `conformance/` fixtures and the core's
+> tests through `../anvil-feed-php`, and does not run from this checkout; CI runs in the monorepo.
+> Install with `composer require anvil-coder/anvil-feed-laravel`. Laravel 12 or 13, PHP 8.3 or newer.
+
+The Laravel integration for the [Anvil Feed](https://github.com/anvil-coder/anvil-feed-php) SDK. An unhandled exception becomes one
 event in the Anvil cockpit; the diff your application takes on is one line in `bootstrap/app.php` and a
 token in `.env`.
 
