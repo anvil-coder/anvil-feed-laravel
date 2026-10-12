@@ -39,23 +39,11 @@ step 4 tells you which one is missing if you skip one:
 
 ### Step 1 — install (1 minute)
 
-Until `0.1.0` is on Packagist it is installed from a checkout — the packages live in a subdirectory of a
-monorepo, which a plain VCS repository cannot see. Run this beside your application directory (the three
-commands below were run against a clean project exactly as written):
-
 ```bash
-git clone git@github.com:anvil-coder/anvil-feed.git ../anvil-feed
-
-composer config repositories.anvil-feed-php --json \
-  '{"type":"path","url":"../anvil-feed/php/anvil-feed-php","options":{"versions":{"anvil-coder/anvil-feed-php":"0.1.0"}}}'
-composer config repositories.anvil-feed-laravel --json \
-  '{"type":"path","url":"../anvil-feed/php/anvil-feed-laravel","options":{"versions":{"anvil-coder/anvil-feed-laravel":"0.1.0"}}}'
-
-composer require anvil-coder/anvil-feed-laravel:^0.1
+composer require anvil-coder/anvil-feed-laravel
 ```
 
-(The `versions` option is what gives an untagged checkout the version the constraint asks for. Once the
-package is published, the whole step is `composer require anvil-coder/anvil-feed-laravel`.)
+Laravel 12 or 13, PHP 8.3 or newer. Package discovery registers the provider; nothing to add.
 
 The service provider is auto-discovered. Nothing is added to `config/app.php`.
 
@@ -80,7 +68,7 @@ than reporting into the wrong project.
 
 ### Step 3 — one line in `bootstrap/app.php` (1 minute)
 
-A default Laravel 12 skeleton already has a `->withExceptions()` call. Add the one line to its body:
+A default Laravel 12 or 13 skeleton already has a `->withExceptions()` call. Add the one line to its body:
 
 ```php
 <?php
