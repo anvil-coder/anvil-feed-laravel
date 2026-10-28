@@ -38,14 +38,15 @@ final class TestCommandTest extends TestCase
      */
     public function testTheReleaseLineNamesTheSourceThatAnswered(): void
     {
+        $this->withoutACheckout();
+
         $this->artisan('anvil-feed:test')
             ->expectsOutputToContain('release:     (none — ANVIL_RELEASE is unset, no .git, no REVISION or .release file in')
             ->assertExitCode(0)
             ->run();
 
         $this->app['config']->set('anvil-feed.release', '1.4.2');
-        $this->app->forgetInstance(\AnvilFeed\Release::class);
-        $this->rebuildSdk();
+        $this->withoutACheckout();
 
         $this->artisan('anvil-feed:test')
             ->expectsOutputToContain('release:     1.4.2 (ANVIL_RELEASE)')
@@ -55,6 +56,41 @@ final class TestCommandTest extends TestCase
         self::assertSame('1.4.2', $posted['release'], 'the event carries the same release the line names');
     }
 
+    public function testACheckoutsShaIsTheReleaseAndNamesTheGitSource(): void
+    {
+        $root = sys_get_temp_dir() . '/anvil-feed-test-command-' . bin2hex(random_bytes(6));
+        mkdir($root . '/.git', 0o777, true);
+        file_put_contents($root . '/.git/HEAD', "a3f9c2e1b4d5e6f708192a3b4c5d6e7f80910111\n");
+        try {
+            $this->app->instance(\AnvilFeed\GitContext::class, \AnvilFeed\GitContext::discover($root));
+            $this->app->forgetInstance(\AnvilFeed\Release::class);
+            $this->rebuildSdk();
+
+            $this->artisan('anvil-feed:test')
+                ->expectsOutputToContain('release:     a3f9c2e1b4d5e6f708192a3b4c5d6e7f80910111 (.git/HEAD)')
+                ->assertExitCode(0)
+                ->run();
+        } finally {
+            @unlink($root . '/.git/HEAD');
+            @rmdir($root . '/.git');
+            @rmdir($root);
+        }
+    }
+
+    /**
+     * The git source is taken out of the picture: the provider's GitContext walks UP from basePath() and finds
+     * the repository this test suite runs in — a `.git` directory on CI, whose sha would answer before the
+     * REVISION file and the "none" case, and a worktree's `.git` FILE on a developer machine, whose branch ref
+     * lives elsewhere and answers nothing. The two runs disagreed about these tests until the checkout was
+     * taken out; the git source has its own test above, on a checkout the test builds.
+     */
+    private function withoutACheckout(): void
+    {
+        $this->app->instance(\AnvilFeed\GitContext::class, \AnvilFeed\GitContext::none());
+        $this->app->forgetInstance(\AnvilFeed\Release::class);
+        $this->rebuildSdk();
+    }
+
     /** The provider resolves the chain on the APPLICATION's root, not on the process's cwd. */
     public function testARevisionFileInTheApplicationRootIsTheReleaseOfEveryEvent(): void
     {
@@ -62,8 +98,7 @@ final class TestCommandTest extends TestCase
         self::assertFileDoesNotExist($revision, 'the testbench skeleton carries no REVISION of its own');
         file_put_contents($revision, "3f2c1a9e7b6d5c4e3f2a1b0c9d8e7f6a5b4c3d2e\n");
         try {
-            $this->app->forgetInstance(\AnvilFeed\Release::class);
-            $this->rebuildSdk();
+            $this->withoutACheckout();
 
             $this->artisan('anvil-feed:test')
                 ->expectsOutputToContain('release:     3f2c1a9e7b6d5c4e3f2a1b0c9d8e7f6a5b4c3d2e (REVISION file)')
