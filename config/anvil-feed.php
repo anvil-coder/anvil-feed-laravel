@@ -28,7 +28,9 @@ return [
     'service' => env('ANVIL_SERVICE'),
     'environment' => env('ANVIL_ENVIRONMENT'),
 
-    // Falls back to the commit of the deployed checkout, read from .git without running git.
+    // Falls back to the commit of the deployed checkout (read from .git without running git), then to a
+    // REVISION or .release file in the application root, then to the releases/<id> directory name of a
+    // zero-downtime deploy. `php artisan anvil-feed:test` prints which one answered.
     'release' => env('ANVIL_RELEASE'),
 
     'max_queue_size' => (int) env('ANVIL_MAX_QUEUE_SIZE', 1000),

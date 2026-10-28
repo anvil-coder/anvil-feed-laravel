@@ -6,6 +6,7 @@ namespace AnvilFeed\Laravel;
 
 use AnvilFeed\Client;
 use AnvilFeed\Config;
+use AnvilFeed\Release;
 use AnvilFeed\Transport\Response;
 use Illuminate\Console\Command;
 
@@ -27,12 +28,17 @@ final class TestCommand extends Command
 
     protected $description = 'Send one test event to the Anvil Feed ingest and report what came back.';
 
-    public function handle(Config $config, Client $client, VerdictTransport $transport): int
+    public function handle(Config $config, Client $client, VerdictTransport $transport, Release $release): int
     {
         $this->line('endpoint:    ' . $config->eventsUrl());
         $this->line('service:     ' . $config->service);
         $this->line('environment: ' . $config->environment);
-        $this->line('release:     ' . ($config->release ?? '(none — not a git checkout, and ANVIL_RELEASE is unset)'));
+        // The source beside the value (issue #13): "(none)" alone sent an operator to guess which of the
+        // five places the SDK had looked in.
+        $this->line('release:     ' . ($release->value === null
+            ? '(none — ANVIL_RELEASE is unset, no .git, no REVISION or .release file in ' . $this->laravel->basePath()
+                . ', and it is not a releases/<id> directory)'
+            : $release->value . ' (' . $release->source . ')'));
         // Twelve characters is the eight-character prefix `anv_srv_` plus four of the secret: enough to
         // see that the format is right and the value is present, in a line that routinely ends up in a CI
         // log, a support ticket or a screen share.

@@ -9,6 +9,7 @@ use AnvilFeed\Client;
 use AnvilFeed\Config;
 use AnvilFeed\GitContext;
 use AnvilFeed\Logger;
+use AnvilFeed\Release;
 use AnvilFeed\Transport\DirectTransport;
 use AnvilFeed\Transport\PsrTransport;
 use AnvilFeed\Transport\Transport;
@@ -90,12 +91,29 @@ final class AnvilFeedServiceProvider extends ServiceProvider
             return new PeriodicFlush($app);
         });
 
+        $this->app->singleton(GitContext::class, static function (Application $app): GitContext {
+            return GitContext::discover($app->basePath());
+        });
+
+        // Issue #13: ANVIL_RELEASE, then .git, then a REVISION/.release file in the application root, then
+        // the releases/<id> directory a zero-downtime deploy (Forge, Envoyer, Deployer) runs from. Bound on
+        // its own so anvil-feed:test can print which source answered.
+        $this->app->singleton(Release::class, static function (Application $app): Release {
+            return Release::discover(
+                $app->make(Config::class)->release,
+                $app->make(GitContext::class),
+                $app->basePath()
+            );
+        });
+
         $this->app->singleton(Client::class, static function (Application $app): Client {
             return Client::create(
                 $app->make(Config::class),
                 $app->make(VerdictTransport::class),
                 $app->make(Logger::class),
-                GitContext::discover($app->basePath())
+                $app->make(GitContext::class),
+                null,
+                $app->make(Release::class)
             );
         });
     }

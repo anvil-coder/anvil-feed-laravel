@@ -31,6 +31,50 @@ final class TestCommandTest extends TestCase
         self::assertSame('AnvilFeed.TestEvent', $posted['exception']['type']);
     }
 
+    /**
+     * Issue #13: the release line names its SOURCE. "(none)" alone sent an operator on a Forge host to
+     * guess which of the five places the SDK had looked in — and to a deploy-script change that was not
+     * needed once the releases/<id> directory counted.
+     */
+    public function testTheReleaseLineNamesTheSourceThatAnswered(): void
+    {
+        $this->artisan('anvil-feed:test')
+            ->expectsOutputToContain('release:     (none — ANVIL_RELEASE is unset, no .git, no REVISION or .release file in')
+            ->assertExitCode(0)
+            ->run();
+
+        $this->app['config']->set('anvil-feed.release', '1.4.2');
+        $this->app->forgetInstance(\AnvilFeed\Release::class);
+        $this->rebuildSdk();
+
+        $this->artisan('anvil-feed:test')
+            ->expectsOutputToContain('release:     1.4.2 (ANVIL_RELEASE)')
+            ->assertExitCode(0)
+            ->run();
+        $posted = json_decode($this->transport->calls[1]['body'], true);
+        self::assertSame('1.4.2', $posted['release'], 'the event carries the same release the line names');
+    }
+
+    /** The provider resolves the chain on the APPLICATION's root, not on the process's cwd. */
+    public function testARevisionFileInTheApplicationRootIsTheReleaseOfEveryEvent(): void
+    {
+        $revision = $this->app->basePath('REVISION');
+        self::assertFileDoesNotExist($revision, 'the testbench skeleton carries no REVISION of its own');
+        file_put_contents($revision, "3f2c1a9e7b6d5c4e3f2a1b0c9d8e7f6a5b4c3d2e\n");
+        try {
+            $this->app->forgetInstance(\AnvilFeed\Release::class);
+            $this->rebuildSdk();
+
+            $this->artisan('anvil-feed:test')
+                ->expectsOutputToContain('release:     3f2c1a9e7b6d5c4e3f2a1b0c9d8e7f6a5b4c3d2e (REVISION file)')
+                ->assertExitCode(0)
+                ->run();
+            self::assertSame('3f2c1a9e7b6d5c4e3f2a1b0c9d8e7f6a5b4c3d2e', $this->onlyPostedEvent()['release']);
+        } finally {
+            @unlink($revision);
+        }
+    }
+
     public function testTheTokenLineShowsTheFormatAndFourCharactersOfTheSecret(): void
     {
         $this->artisan('anvil-feed:test')
